@@ -1,0 +1,310 @@
+// package mainaaa
+
+// import (
+// 	"flag"
+// 	"fmt"
+// 	"io/ioutil"
+// 	"log"
+// 	"math"
+// 	"sort"
+// 	"strconv"
+
+// 	"github.com/tealeg/xlsx"
+// )
+
+// type entry struct {
+// 	ID      string
+// 	kind    string
+// 	book    int
+// 	verse   int
+// 	word    string
+// 	netForm string
+// 	lemma   string
+// 	tag     string
+// }
+
+// type wordData [4]string // normalized, lemma, tag, id
+// type verseData []wordData
+// type book map[int]verseData
+
+// func main_() {
+
+// 	var dataFolder = flag.String("data", "input-data", "Data folder with xslx version. Each filename will be used as text id.")
+// 	flag.Parse()
+
+// 	files, err := ioutil.ReadDir(*dataFolder)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	fileNames := []string{}
+// 	for _, f := range files {
+// 		fileNames = append(fileNames, f.Name())
+// 	}
+
+// 	alignmentsToCreate := alignmentPairs(fileNames)
+
+// 	fmt.Println(alignmentsToCreate)
+
+// 	// fmt.Println(os.Args)
+
+// 	// if len(os.Args) < 2 {
+// 	// 	fmt.Println("Provide an input Xls file!")
+// 	// 	os.Exit(0)
+// 	// }
+// 	// path := os.Args[1]
+// 	// entries, err := getEntries(path)
+// 	// if err != nil {
+// 	// 	log.Fatalln(err)
+// 	// }
+
+// 	// bookDataMap := mapData(entries)
+// 	// booksVerseMap := mapVerses(entries)
+
+// 	// if err := os.RemoveAll("out"); err != nil {
+// 	// 	log.Fatalln(err)
+// 	// }
+
+// 	// if err := os.Mkdir("out", 0700); err != nil {
+// 	// 	log.Fatalln(err)
+// 	// }
+
+// 	// for book := range bookDataMap {
+// 	// 	data, err := json.Marshal(bookDataMap[book])
+// 	// 	if err != nil {
+// 	// 		log.Fatalln(err)
+// 	// 	}
+
+// 	// 	verses, err := json.Marshal(booksVerseMap[book])
+// 	// 	if err != nil {
+// 	// 		log.Fatalln(err)
+// 	// 	}
+
+// 	// 	if err := os.Mkdir(fmt.Sprintf("out/%v", book), 0764); err != nil {
+// 	// 		log.Fatalln(err)
+// 	// 	}
+// 	// 	ioutil.WriteFile(fmt.Sprintf("out/%v/data.json", book), data, 0664)
+// 	// 	ioutil.WriteFile(fmt.Sprintf("out/%v/verses.json", book), verses, 0664)
+// 	// }
+// }
+
+// func getWords(file string) {
+// 	xlFile, err := xlsx.OpenFile(file)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	data := map[int]Word{}
+// 	for _, sheet := range xlFile.Sheets {
+// 		for _, row := range sheet.Rows {
+// 			if row.Cells[0].Value == "" {
+// 				continue
+// 			}
+// 			id, err := strconv.Atoi(row.Cells[0].Value)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 			w := Word{
+// 				ID:         id,
+// 				Verse:      row.Cells[10].Value,
+// 				Chant:      row.Cells[3].Value,
+// 				Text:       row.Cells[15].Value,
+// 				Normalized: row.Cells[19].Value,
+// 				Lemma:      row.Cells[20].Value,
+// 				Tag:        row.Cells[21].Value,
+// 			}
+// 			if w.Chant == "" || w.Verse == "" {
+// 				continue
+// 			}
+// 			data[w.ID] = w
+// 		}
+// 	}
+// 	return *updateRelPos(&data), nil
+// }
+
+// func getVerses(file string) {
+
+// }
+
+// func alignmentPairs(fileNames []string) map[string][]string {
+// 	combinations := map[string][]string{}
+// 	for _, fn := range fileNames {
+// 		combinations[fn] = []string{}
+// 		for _, cn := range fileNames {
+// 			if fn != cn {
+// 				combinations[fn] = append(combinations[fn], cn)
+// 			}
+// 		}
+// 	}
+// 	return combinations
+// }
+
+// func getKind(s string) string {
+// 	switch s {
+// 	case "Tit.":
+// 		return "t"
+// 	case "Omisit":
+// 		return "o"
+// 	case "Des.":
+// 		return "f"
+// 	default:
+// 		return "v"
+// 	}
+// }
+
+// func getEntries(path string) ([]entry, error) {
+// 	fmt.Println("Reading words from ", path)
+// 	xlFile, err := xlsx.OpenFile(path)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	entries := []entry{}
+// 	for _, sheet := range xlFile.Sheets {
+// 		for i, row := range sheet.Rows {
+// 			if i == 0 || row.Cells[0].Value == "" {
+// 				continue
+// 			}
+// 			kind := getKind(row.Cells[4].Value)
+// 			book, err := strconv.Atoi(row.Cells[3].Value)
+// 			if err != nil {
+// 				return nil, err
+// 			}
+// 			var verse int
+// 			if kind == "f" {
+// 				verse = math.MaxInt32
+// 			}
+// 			if kind != "f" && kind != "t" {
+// 				verse, err = strconv.Atoi(row.Cells[11].Value)
+// 				if err != nil {
+// 					return nil, err
+// 				}
+// 			}
+// 			entries = append(entries, entry{
+// 				ID:      row.Cells[0].Value,
+// 				kind:    kind,
+// 				book:    book,
+// 				verse:   verse,
+// 				word:    row.Cells[15].Value,
+// 				netForm: row.Cells[19].Value,
+// 				lemma:   row.Cells[20].Value,
+// 				tag:     row.Cells[21].Value,
+// 			})
+// 		}
+// 	}
+// 	return entries, nil
+// }
+
+// func mapData(entries []entry) map[int][]verseData {
+// 	/*
+// 		map[int][1]map[int][][3]string
+// 		books = {
+// 			1: {
+// 				1: [ [a,b, c], [a,b,c], ...]  // verse 1
+// 				2: [ [a,b, c], [a,b,c], ...]  // verse 2
+// 				3: ...
+// 			},
+// 			2: ...
+// 		}
+
+// 	*/
+// 	data := map[int]book{}
+
+// 	for _, e := range entries {
+// 		if data[e.book] == nil {
+// 			data[e.book] = map[int]verseData{}
+// 		}
+// 		toAppend := wordData{e.netForm, e.lemma, e.tag, e.ID}
+// 		data[e.book][e.verse] = append(data[e.book][e.verse], toAppend)
+// 	}
+// 	booksArray := map[int][]verseData{}
+
+// 	for book := range data {
+// 		booksArray[book] = []verseData{}
+
+// 		var dataKeys []int
+// 		for k := range data[book] {
+// 			dataKeys = append(dataKeys, k)
+// 		}
+// 		sort.Ints(dataKeys)
+
+// 		for _, k := range dataKeys {
+// 			booksArray[book] = append(booksArray[book], data[book][k])
+// 		}
+// 	}
+// 	return booksArray
+// }
+
+// type verse struct {
+// 	Title  string          `json:"title"`
+// 	N      int             `json:"n"`
+// 	Verses [][]interface{} `json:"verses"`
+// }
+
+// type verseEntry struct {
+// 	kind   string
+// 	verse  int
+// 	verses []string
+// }
+
+// func mapVerses(entries []entry) map[int]verse {
+
+// 	bookVersesMap := map[int]map[int]wordata{}
+
+// 	for _, e := range entries {
+// 		if bookVersesMap[e.book] == nil {
+// 			bookVersesMap[e.book] = map[int]verseEntry{}
+// 		}
+
+// 		if bookVersesMap[e.book][e.verse].kind == "" {
+// 			bookVersesMap[e.book][e.verse] = verseEntry{
+// 				kind:   e.kind,
+// 				verse:  e.verse,
+// 				verses: []string{},
+// 			}
+// 		}
+
+// 		bookVersesMap[e.book][e.verse] = verseEntry{
+// 			kind:   bookVersesMap[e.book][e.verse].kind,
+// 			verse:  bookVersesMap[e.book][e.verse].verse,
+// 			verses: append(bookVersesMap[e.book][e.verse].verses, e.word),
+// 		}
+// 	}
+// 	data := map[int]verse{}
+
+// 	var bookKeys []int
+// 	for k := range bookVersesMap {
+// 		bookKeys = append(bookKeys, k)
+// 	}
+// 	sort.Ints(bookKeys)
+
+// 	for _, k := range bookKeys {
+// 		verses := [][]interface{}{}
+// 		var verseKeys []int
+// 		for k := range bookVersesMap[k] {
+// 			verseKeys = append(verseKeys, k)
+// 		}
+// 		sort.Ints(verseKeys)
+
+// 		for _, i := range verseKeys {
+// 			var verse []interface{}
+// 			switch bookVersesMap[k][i].kind {
+// 			case "t":
+// 				verse = []interface{}{bookVersesMap[k][i].kind, bookVersesMap[k][i].verses}
+// 			case "o":
+// 				verse = []interface{}{bookVersesMap[k][i].kind, bookVersesMap[k][i].verse}
+// 			case "f":
+// 				verse = []interface{}{bookVersesMap[k][i].kind, bookVersesMap[k][i].verses}
+// 			default:
+// 				verse = []interface{}{bookVersesMap[k][i].kind, bookVersesMap[k][i].verse, bookVersesMap[k][i].verses}
+// 			}
+
+// 			verses = append(verses, verse)
+// 		}
+// 		data[k] = verse{
+// 			Title:  fmt.Sprintf("Book %v", k),
+// 			N:      k,
+// 			Verses: verses,
+// 		}
+// 	}
+
+// 	return data
+// }
