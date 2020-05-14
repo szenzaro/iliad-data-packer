@@ -32,6 +32,7 @@ func main() {
 	if err := os.RemoveAll("out"); err != nil {
 		log.Fatalln(err)
 	}
+	start := time.Now()
 	texts := map[string]textInfo{}
 	for _, file := range fileNames {
 		fmt.Println()
@@ -56,6 +57,8 @@ func main() {
 		fmt.Println()
 	}
 	generateAlignments(fileNames, texts, *vocPath, *scholiePath)
+	elapsed := time.Since(start)
+	fmt.Println("Generation time needed: ", elapsed)
 }
 
 type wordData struct {
