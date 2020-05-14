@@ -3,7 +3,16 @@ github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORN
 github.com/kr/pty v1.1.1/go.mod h1:pFQYn66WHrOpPYNljwOMqo10TkYh1fy3cYio2l3bCsQ=
 github.com/kr/text v0.1.0 h1:45sCR5RtlFHMR4UwH9sdQ5TC8v0qDQCHnXt+kaKSTVE=
 github.com/kr/text v0.1.0/go.mod h1:4Jbv+DJW3UT/LiOwJeYQe1efqtUx/iVham/4vfdArNI=
+github.com/sqs/goreturns v0.0.0-20181028201513-538ac6014518/go.mod h1:CKI4AZ4XmGV240rTHfO0hfE83S6/a3/Q1siZJ/vXf7A=
+github.com/szenzaro/go-tmx v1.0.3 h1:FqfLJ9RzFAm8/m7O/drpFQNbsFrq/baxE0TkzhSo4Rw=
+github.com/szenzaro/go-tmx v1.0.3/go.mod h1:mSVsHf1XDCdGr9O43EVTa4sEKR2FlIa55UEgRULsHYE=
+github.com/szenzaro/iliad-aligner v0.0.0-20200514132406-7c8b59cec940 h1:qBeAHH7aAAaq1yjZD893iEhwrz07TqRmdZ38hFrqvyQ=
+github.com/szenzaro/iliad-aligner v0.0.0-20200514132406-7c8b59cec940/go.mod h1:VEFNngS4OmTwwJwCLjxtH5D7Hf754b3QJkXqWZwA3hY=
+github.com/szenzaro/iliad-aligner v0.0.0-20200514133354-be0bac139628 h1:7R5ox3lNgZK2xCWkdOrRiaFg6ZdH5asxRLul7BcOVHU=
+github.com/szenzaro/iliad-aligner v0.0.0-20200514133354-be0bac139628/go.mod h1:VEFNngS4OmTwwJwCLjxtH5D7Hf754b3QJkXqWZwA3hY=
 github.com/tealeg/xlsx v1.0.5 h1:+f8oFmvY8Gw1iUXzPk+kz+4GpbDZPK1FhPiQRd+ypgE=
 github.com/tealeg/xlsx v1.0.5/go.mod h1:btRS8dz54TDnvKNosuAqxrM1QgN1udgk9O34bDCnORM=
+github.com/texttheater/golang-levenshtein v0.0.0-20191208221605-eb6844b05fc6 h1:9VTskZOIRf2vKF3UL8TuWElry5pgUpV1tFSe/e/0m/E=
+github.com/texttheater/golang-levenshtein v0.0.0-20191208221605-eb6844b05fc6/go.mod h1:XDKHRm5ThF8YJjx001LtgelzsoaEcvnA7lVWz9EeX3g=
 gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 h1:YR8cESwS4TdDjEe65xsg0ogRM/Nc3DYOhEAlW+xobZo=
 gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=

@@ -1,28 +1,77 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"math"
+	"os"
+	"reflect"
+	"sort"
 	"strconv"
+	"strings"
+	"time"
 
+	"github.com/szenzaro/iliad-aligner/aligner"
 	"github.com/tealeg/xlsx"
 )
 
-type textData struct{}
+func main() {
+	dataFolder := flag.String("data", "input-data", "Data folder with xslx version. Each filename will be used as text id.")
+	vocPath := flag.String("voc", "data/Vocabulaire_Genavensis.xlsx", "path to the vocabulary xlsx file")
+	scholiePath := flag.String("sch", "data/scholied.json", "path to the scholie JSON file")
+	flag.Parse()
+
+	fileNames, err := getFileNames(*dataFolder)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	if err := os.RemoveAll("out"); err != nil {
+		log.Fatalln(err)
+	}
+	texts := map[string]textInfo{}
+	for _, file := range fileNames {
+		fmt.Println()
+
+		words, verses, err := parseExcel(fmt.Sprint(*dataFolder, "/", file))
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		textName := getTextName(file)
+		texts[textName] = textInfo{words, verses}
+
+		folder := "texts/" + textName + "/"
+
+		fmt.Println("Generate text info")
+		generateTextData(folder, words, verses)
+
+		fmt.Println("Generate Search indexes")
+		generateIndex(words, folder+"/index/", "Lemma")
+		generateIndex(words, folder+"/index/", "Text")
+
+		fmt.Println()
+	}
+	generateAlignments(fileNames, texts, *vocPath, *scholiePath)
+}
+
 type wordData struct {
-	ID        string
-	text      string
-	cleanText string
-	lemma     string
-	tag       string
+	ID        string `json:"id"`
+	Text      string `json:"text"`
+	Chant     string `json:"chant"`
+	Verse     string `json:"verse"`
+	CleanText string `json:"normalized"`
+	Lemma     string `json:"lemma"`
+	Tag       string `json:"tag"`
+	Source    string `json:"source"`
 }
 type verse struct {
-	kind    string
-	number  int
-	wordIDs []string
+	Kind    string
+	Number  int
+	WordIDs []string
 }
 
 type index = map[string][]int
@@ -30,33 +79,232 @@ type index = map[string][]int
 type vocabulary map[string][]string
 type scholie map[string][]string
 
-// Export structs
-type verseExportData struct {
-	Title  string          `json:"title"`
-	N      int             `json:"n"`
-	Verses [][]interface{} `json:"verses"`
+type textInfo struct {
+	words  map[string]wordData
+	verses map[int][]verse
 }
 
-// TODO alignment structures
+func getTextName(fileName string) string { return fileName[:len(fileName)-5] }
 
-func main() {
-	var dataFolder = flag.String("data", "input-data", "Data folder with xslx version. Each filename will be used as text id.")
-	flag.Parse()
+func computeAlignments(tasks map[string]aligner.Problem, ar aligner.Aligner, ff []aligner.Feature, w []float64, subseqLen int) map[string]*aligner.Alignment {
 
-	fileNames, err := getFilePaths(*dataFolder)
-	if err != nil {
-		log.Fatalln(err)
-	}
+	resAlignments := map[string]*aligner.Alignment{}
 
-	// textInfo := []textData{}
-	for _, file := range fileNames {
-		_, _, err := parseExcel(file)
-		// info, err := getTextInfo(file)
+	start := time.Now()
+	for k, p := range tasks {
+		fmt.Println("Aligning ", k)
+		a := aligner.NewFromWordBags(p.From, p.To)
+		res, err := a.Align(ar, ff, w, subseqLen, aligner.AdditionalData)
 		if err != nil {
 			log.Fatalln(err)
 		}
-		// textInfo = append(textInfo, info)
+		fmt.Println()
+		fmt.Println("Got: ", res)
 	}
+	elapsed := time.Since(start)
+	fmt.Println("Alignment time needed: ", elapsed)
+	return resAlignments
+}
+
+func getProblems(source, target string, sourceWords, targetWords map[string]wordData) map[string]aligner.Problem {
+	data := map[string]aligner.Problem{}
+	for _, w := range sourceWords {
+		problemID := fmt.Sprintf("%s.%s", w.Chant, w.Verse)
+		if _, ok := data[problemID]; !ok {
+			if problemID == "" {
+				panic("AA") // TODO
+			}
+			data[problemID] = aligner.Problem{From: map[string]aligner.Word{}, To: map[string]aligner.Word{}}
+		}
+		data[problemID].From[w.ID] = getAlignerWord(w)
+	}
+	for _, w := range targetWords {
+		problemID := fmt.Sprintf("%s.%s", w.Chant, w.Verse)
+		if _, ok := data[problemID]; !ok {
+			if problemID == "" {
+				panic("AA") // TODO
+			}
+			data[problemID] = aligner.Problem{From: map[string]aligner.Word{}, To: map[string]aligner.Word{}}
+		}
+		data[problemID].To[w.ID] = getAlignerWord(w)
+	}
+	return data
+}
+
+func getAlignerWord(w wordData) aligner.Word {
+	return aligner.Word{ID: w.ID, Text: w.Text, Lemma: w.Lemma, Tag: w.Tag, Verse: w.Verse, Chant: w.Chant, Source: w.Source}
+}
+
+func generateAlignment(sourceText, targetText string, textInfo map[string]textInfo, ff []aligner.Feature, w []float64, subseqLen int) (map[string]*aligner.Alignment, error) {
+	fmt.Println("Generating alignment for ", sourceText, " - ", targetText)
+
+	problems := getProblems(sourceText, targetText, textInfo[sourceText].words, textInfo[targetText].words)
+	ar := aligner.NewGreekAligner()
+
+	aligments := map[string]*aligner.Alignment{}
+
+	for id, p := range problems {
+		start := time.Now()
+		fmt.Println("Align in progres for ", id)
+		a := aligner.NewFromWordBags(p.From, p.To)
+		res, err := a.Align(ar, ff, w, subseqLen, aligner.AdditionalData)
+		if err != nil {
+			return nil, fmt.Errorf("generateAlignment %s: %w", id, err)
+		}
+		aligments[id] = res
+		elapsed := time.Since(start)
+		fmt.Println(id, " has been aligned in ", elapsed)
+	}
+	return aligments, nil
+}
+
+func generateAlignments(fileNames []string, textInfo map[string]textInfo, vocPath, scholiePath string) error {
+	w := []float64{0.2956361042981355, 0.060325626401096885, 0.033855873309357465, 0.024419617049442562, 0.8058173377380647, 0.004187020307669374, 0.1931506936628718}
+
+	ff := []aligner.Feature{
+		aligner.EditType,
+		aligner.LexicalSimilarity,
+		aligner.LemmaDistance,
+		aligner.TagDistance,
+		aligner.VocDistance,
+		aligner.ScholieDistance,
+		aligner.MaxDistance,
+	}
+
+	subseqLen := 5
+	aligner.AdditionalData = map[string]interface{}{}
+	fmt.Println("Loading vocabulary")
+	_, err := aligner.LoadVoc(vocPath)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("Loading scholie")
+	_, err = aligner.LoadScholie(scholiePath)
+	if err != nil {
+		return err
+	}
+	for i, sourceFile := range fileNames {
+		for j := i + 1; j < len(fileNames); j++ {
+			targetFile := fileNames[j]
+			source, target := getTextName(sourceFile), getTextName(targetFile)
+			alignments, err := generateAlignment(source, target, textInfo, ff, w, subseqLen)
+			if err != nil {
+				return fmt.Errorf("generateAlignments: %w", err)
+			}
+			sourceJSONEdits, targetJSONEdits := alignments["asd"].ToJSONEdits()
+
+			// Save to JSON
+			dir := "out/alignments/auto/" + source + "/"
+			writeToJSON(dir, dir+target+".json", sourceJSONEdits)
+			dir = "out/alignments/auto/" + target + "/"
+			writeToJSON(dir, dir+source+".json", targetJSONEdits)
+		}
+	}
+
+	return nil
+}
+
+func generateIndex(words map[string]wordData, folder, fieldName string) {
+	index := getIndexWords(words, fieldName)
+	dir := "out/" + folder
+	writeToJSON(dir, dir+strings.ToLower(fieldName)+".json", index)
+}
+
+func wordsByChant(words map[string]wordData) map[string]map[string]wordData {
+	d := map[string]map[string]wordData{}
+	for k, v := range words {
+		if _, present := d[v.Chant]; !present {
+			d[v.Chant] = map[string]wordData{}
+		}
+		d[v.Chant][k] = v
+	}
+	return d
+}
+
+func generateTextData(folder string, words map[string]wordData, verses map[int][]verse) {
+	dir := "out/" + folder
+	writeToJSON(dir, dir+"/words.json", wordsToExportData(words))
+
+	for k, v := range wordsByChant(words) {
+		newdir := dir + k
+		writeToJSON(newdir, newdir+"/words.json", wordsToExportData(v))
+	}
+
+	for k, v := range versesToExportData(verses) {
+		newdir := fmt.Sprintf("%s%v", dir, k)
+		writeToJSON(newdir, newdir+"/verses.json", v)
+	}
+}
+
+func writeToJSON(folder, path string, data interface{}) {
+	fmt.Println("Savind JSON to ", path)
+
+	if err := os.MkdirAll(folder, 0777); err != nil {
+		log.Fatalln(err)
+	}
+
+	d, err := json.Marshal(data)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	err = ioutil.WriteFile(path, d, 0664)
+	if err != nil {
+		log.Fatalln(err)
+	}
+}
+
+func wordsToExportData(ws map[string]wordData) map[string][]interface{} {
+	d := map[string][]interface{}{}
+	for k, w := range ws {
+		d[k] = []interface{}{w.Text, w.CleanText, w.Lemma, w.Tag, w.Verse}
+	}
+	return d
+}
+
+func getIndexWords(words map[string]wordData, fieldName string) map[string][]string {
+	uniqueWords := map[string][]string{}
+	for _, v := range words {
+		fieldValue := reflect.ValueOf(v).FieldByName(fieldName).String()
+		addToMap(v.ID, fieldValue, &uniqueWords)
+	}
+	for _, v := range uniqueWords {
+		sort.Strings(v)
+	}
+	return uniqueWords
+}
+
+func addToMap(id string, key string, data *map[string][]string) {
+	if key == "" {
+		return
+	}
+	_, present := (*data)[key]
+	if !present {
+		(*data)[key] = []string{}
+	}
+	(*data)[key] = append((*data)[key], id)
+}
+
+func versesToExportData(vs map[int][]verse) map[int][]interface{} {
+	d := map[int][]interface{}{}
+	for k, w := range vs {
+		d[k] = []interface{}{}
+		for i := range w {
+			var v []interface{}
+			switch vs[k][i].Kind {
+			case "t":
+				v = []interface{}{w[i].Kind, w[i].WordIDs}
+			case "o":
+				v = []interface{}{w[i].Kind, w[i].Number}
+			case "f":
+				v = []interface{}{w[i].Kind, w[i].WordIDs}
+			default:
+				v = []interface{}{w[i].Kind, w[i].Number, w[i].WordIDs}
+			}
+			d[k] = append(d[k], v)
+		}
+	}
+	return d
 }
 
 func mergeMaps(x, y map[string]wordData) map[string]wordData {
@@ -70,25 +318,7 @@ func mergeMaps(x, y map[string]wordData) map[string]wordData {
 	return data
 }
 
-func getWords(path string) map[string]wordData {
-	// id = text + id + id2
-	// read data from excel
-	return map[string]wordData{} // TODO
-}
-
-func getVerses(path string) []verse {
-	return []verse{} // TODO
-}
-
-func getTextInfo(path string) (textData, error) {
-	return textData{}, nil // TODO
-}
-
-func getIndex(words map[string]wordData) index {
-	return index{} // TODO
-}
-
-func getFilePaths(dirPath string) ([]string, error) {
+func getFileNames(dirPath string) ([]string, error) {
 	files, err := ioutil.ReadDir(dirPath)
 	if err != nil {
 		return nil, err
@@ -96,7 +326,7 @@ func getFilePaths(dirPath string) ([]string, error) {
 
 	fileNames := []string{}
 	for _, f := range files {
-		fileNames = append(fileNames, fmt.Sprint(dirPath, "/", f.Name()))
+		fileNames = append(fileNames, f.Name())
 	}
 
 	return fileNames, nil
@@ -105,10 +335,13 @@ func getFilePaths(dirPath string) ([]string, error) {
 func getWord(row *xlsx.Row) wordData {
 	return wordData{
 		ID:        fmt.Sprint(row.Cells[2].Value, "-", row.Cells[0].Value, "-", row.Cells[1].Value),
-		text:      row.Cells[15].Value,
-		cleanText: row.Cells[19].Value,
-		lemma:     row.Cells[20].Value,
-		tag:       row.Cells[21].Value,
+		Text:      row.Cells[15].Value,
+		CleanText: row.Cells[19].Value,
+		Lemma:     row.Cells[20].Value,
+		Tag:       row.Cells[21].Value,
+		Chant:     row.Cells[3].Value,
+		Verse:     row.Cells[10].Value,
+		Source:    row.Cells[2].Value,
 	}
 }
 
@@ -135,6 +368,7 @@ func getVerseInfo(row *xlsx.Row) (int, string, int, error) { // get book, kind, 
 }
 
 func parseExcel(path string) (map[string]wordData, map[int][]verse, error) { // returns all words and verses divided by book
+	fmt.Println("Parsing ", path)
 	xlFile, err := xlsx.OpenFile(path)
 	if err != nil {
 		return nil, nil, err
@@ -165,10 +399,10 @@ func parseExcel(path string) (map[string]wordData, map[int][]verse, error) { // 
 				if _, exists := versesByBook[book]; !exists {
 					versesByBook[book] = []verse{}
 				}
-				versesByBook[book] = append(versesByBook[book], verse{kind: kind, number: verseNumber, wordIDs: []string{}})
+				versesByBook[book] = append(versesByBook[book], verse{Kind: kind, Number: verseNumber, WordIDs: []string{}})
 			}
 			// Append word ID
-			versesByBook[book][len(versesByBook[book])-1].wordIDs = append(versesByBook[book][len(versesByBook[book])-1].wordIDs, word.ID)
+			versesByBook[book][len(versesByBook[book])-1].WordIDs = append(versesByBook[book][len(versesByBook[book])-1].WordIDs, word.ID)
 
 			lastBook = book
 			lastKind = kind

@@ -7,7 +7,7 @@ verses: [ VerseType, number, data... ]
 
 index: Map<int[]>
 
-alignment: Map<{ type:string, target: string[]>
+alignment: Map<{ type:string, target: string[]> // ID -> [ "type", ["id1", "id1", ...]]
 
 ordered_alignment: Map<{ type:string, target: string[]>
 id -> ids Map<{type:String, target: string[]}>
@@ -31,21 +31,18 @@ data
         manifest.json
         pages-to-verses.json
     - alignments
-        - auto (ordered alphabetically)
-            text1-text2.json
-            text1-text3.json
-            text2-text1.json
-            text2-text3.json
-            text3-text1.json
-            text3-text2.json
-            ...
-        - auto (ordered alphabetically)
-            text1-text2.json
-            text1-text3.json
-            text2-text3.json
+        - auto
+            - text1
+                text2.json
+                text3.json
+                ...
+            - text1
+                text1.json
+                text3.json
+                ...
         - manual
-    - texts
-        - text1
+    + texts
+        + text1
             - 1 (chant number)
                 verses.json
                 data.json
@@ -53,7 +50,7 @@ data
             - ...
         - text2
         - ...
-        - index
+        + index
             lemma.json
             text.json
     
