@@ -9,19 +9,29 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/szenzaro/go-tmx"
 	"github.com/szenzaro/iliad-aligner/aligner"
 	"github.com/tealeg/xlsx"
+	"golang.org/x/sync/errgroup"
+	"golang.org/x/text/runes"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 )
 
 func main() {
 	dataFolder := flag.String("data", "input-data", "Data folder with xslx version. Each filename will be used as text id.")
 	vocPath := flag.String("voc", "data/Vocabulaire_Genavensis.xlsx", "path to the vocabulary xlsx file")
 	scholiePath := flag.String("sch", "data/scholied.json", "path to the scholie JSON file")
+	tmxPath := flag.String("tmx", "data/G44_ALI.tmx", "path to the manual TMX alignment file")
+	schAlignPath := flag.String("scha", "data/ScholieAlignment.xlsx", "path to the manual scholie alignment xlsx file")
+
 	flag.Parse()
 
 	fileNames, err := getFileNames(*dataFolder)
@@ -57,6 +67,9 @@ func main() {
 		fmt.Println()
 	}
 	generateAlignments(fileNames, texts, *vocPath, *scholiePath)
+	generateManualAlignments(*tmxPath, "homeric", "paraphrase")
+	generateScholieAligment(*schAlignPath)
+
 	elapsed := time.Since(start)
 	fmt.Println("Generation time needed: ", elapsed)
 }
@@ -85,6 +98,81 @@ type scholie map[string][]string
 type textInfo struct {
 	words  map[string]wordData
 	verses map[int][]verse
+}
+
+type translationUnit struct{ ID, Text string }
+
+type pair struct{ Hom, Para []translationUnit }
+
+type scholieAlignment struct {
+	Source []string `json:"source"`
+	Target []string `json:"target"`
+}
+
+func generateScholieAligment(path string) {
+	fmt.Println("Parsing ", path)
+	xlFile, err := xlsx.OpenFile(path)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	homTargetData := map[string][]string{}
+	homSourceData := map[string][]string{}
+	paraTargetData := map[string][]string{}
+	paraSourceData := map[string][]string{}
+
+	getSource := func(ss []string, s string) []string {
+		d := []string{}
+		for _, x := range ss {
+			if s != x {
+				d = append(d, x)
+			}
+		}
+		return d
+	}
+
+	putData := func(data map[string][]string, source map[string][]string, target []string, ss ...string) {
+		for _, s := range ss {
+			if s != "" {
+				for _, x := range target {
+					if x != "" {
+						data[s] = append(data[s], x)
+					}
+				}
+				source[s] = append(source[s], getSource(ss, s)...)
+			}
+		}
+	}
+
+	for _, row := range xlFile.Sheets[0].Rows {
+		homIDs := strings.Split(strings.TrimSpace(row.Cells[0].Value), ";")
+		paraIDs := strings.Split(strings.TrimSpace(row.Cells[1].Value), ";")
+
+		putData(homTargetData, homSourceData, paraIDs, homIDs...)
+		putData(paraTargetData, paraSourceData, homIDs, paraIDs...)
+	}
+
+	homAlignment := map[string]scholieAlignment{}
+
+	for k := range homTargetData {
+		source := homSourceData[k]
+		if source == nil {
+			source = []string{}
+		}
+		homAlignment[k] = scholieAlignment{Source: source, Target: homTargetData[k]}
+	}
+
+	paraAlignment := map[string]scholieAlignment{}
+	for k := range paraTargetData {
+		source := paraSourceData[k]
+		if source == nil {
+			source = []string{}
+		}
+		paraAlignment[k] = scholieAlignment{Source: source, Target: paraTargetData[k]}
+	}
+
+	writeToJSON("out/scholie-alignment", "out/scholie-alignment/hom-scholie-alignment.json", homAlignment)
+	writeToJSON("out/scholie-alignment", "out/scholie-alignment/para-scholie-alignment.json", paraAlignment)
 }
 
 func getTextName(fileName string) string { return fileName[:len(fileName)-5] }
@@ -134,8 +222,45 @@ func getProblems(source, target string, sourceWords, targetWords map[string]word
 	return data
 }
 
+func parseTMX(path string) []aligner.JSONEdit {
+	tmxAl, err := tmx.Read(path)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	edits := make([]aligner.JSONEdit, len(tmxAl.Body.Tu))
+	for i, v := range tmxAl.Body.Tu {
+		hTxt := v.Tuv[0].Seg.Text
+		pTxt := v.Tuv[1].Seg.Text
+
+		e := getEdit(pair{
+			Hom:  getTranslationUnits(hTxt),
+			Para: getTranslationUnits(pTxt),
+		})
+
+		edits[i] = e
+	}
+	return edits
+}
+
+func generateManualAlignments(path, source, target string) {
+	edits := parseTMX(path)
+	sourceJSONEdits, targetJSONEdits := toJSONEdit(edits)
+
+	// Save to JSON
+	dir := "out/alignments/manual/" + source + "/"
+	writeToJSON(dir, dir+target+".json", sourceJSONEdits)
+	dir = "out/alignments/manual/" + target + "/"
+	writeToJSON(dir, dir+source+".json", targetJSONEdits)
+}
+
 func getAlignerWord(w wordData) aligner.Word {
 	return aligner.Word{ID: w.ID, Text: w.Text, Lemma: w.Lemma, Tag: w.Tag, Verse: w.Verse, Chant: w.Chant, Source: w.Source}
+}
+
+type task struct {
+	ID       string
+	aligment *aligner.Alignment
 }
 
 func generateAlignment(sourceText, targetText string, textInfo map[string]textInfo, ff []aligner.Feature, w []float64, subseqLen int) (map[string]*aligner.Alignment, error) {
@@ -146,18 +271,51 @@ func generateAlignment(sourceText, targetText string, textInfo map[string]textIn
 
 	aligments := map[string]*aligner.Alignment{}
 
-	for id, p := range problems {
-		start := time.Now()
-		fmt.Println("Align in progres for ", id)
-		a := aligner.NewFromWordBags(p.From, p.To)
-		res, err := a.Align(ar, ff, w, subseqLen, aligner.AdditionalData)
-		if err != nil {
-			return nil, fmt.Errorf("generateAlignment %s: %w", id, err)
+	var g errgroup.Group
+	parallelRank := 4
+	ch := make(chan task)
+	go func() {
+		for id, p := range problems {
+			a := aligner.NewFromWordBags(p.From, p.To)
+			ch <- task{id, a}
 		}
-		aligments[id] = res
-		elapsed := time.Since(start)
-		fmt.Println(id, " has been aligned in ", elapsed)
+		close(ch)
+	}()
+
+	for i := 0; i < parallelRank; i++ {
+		g.Go(func() error {
+			for t := range ch {
+				start := time.Now()
+				fmt.Println(t.ID, " alignment in progress")
+				res, err := t.aligment.Align(ar, ff, w, subseqLen, aligner.AdditionalData)
+				if err != nil {
+					return fmt.Errorf("generateAlignment %s: %w", t.ID, err)
+				}
+				aligments[t.ID] = res
+				elapsed := time.Since(start)
+				fmt.Println(t.ID, " has been aligned in ", elapsed)
+			}
+			return nil
+		})
 	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	// for id, p := range problems {
+	// 	start := time.Now()
+	// 	fmt.Println("Align in progres for ", id)
+	// 	a := aligner.NewFromWordBags(p.From, p.To)
+	// 	res, err := a.Align(ar, ff, w, subseqLen, aligner.AdditionalData)
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("generateAlignment %s: %w", id, err)
+	// 	}
+	// 	aligments[id] = res
+	// 	elapsed := time.Since(start)
+	// 	fmt.Println(id, " has been aligned in ", elapsed)
+	// }
+
 	return aligments, nil
 }
 
@@ -187,6 +345,7 @@ func generateAlignments(fileNames []string, textInfo map[string]textInfo, vocPat
 	if err != nil {
 		return err
 	}
+
 	for i, sourceFile := range fileNames {
 		for j := i + 1; j < len(fileNames); j++ {
 			targetFile := fileNames[j]
@@ -195,7 +354,12 @@ func generateAlignments(fileNames []string, textInfo map[string]textInfo, vocPat
 			if err != nil {
 				return fmt.Errorf("generateAlignments: %w", err)
 			}
-			sourceJSONEdits, targetJSONEdits := alignments["asd"].ToJSONEdits()
+
+			alignmenstData := aligner.NewFromEdits()
+			for _, a := range alignments {
+				alignmenstData = aligner.MergeAlignments(a, alignmenstData)
+			}
+			sourceJSONEdits, targetJSONEdits := alignmenstData.ToJSONEdits()
 
 			// Save to JSON
 			dir := "out/alignments/auto/" + source + "/"
@@ -223,6 +387,96 @@ func wordsByChant(words map[string]wordData) map[string]map[string]wordData {
 		d[v.Chant][k] = v
 	}
 	return d
+}
+
+func toJSONEdit(m []aligner.JSONEdit) (map[string]aligner.JSONEdit, map[string]aligner.JSONEdit) {
+	le := map[string]aligner.JSONEdit{}
+	re := map[string]aligner.JSONEdit{}
+	for _, e := range m {
+		e1, e2 := e.Explode()
+
+		for k, ed := range e1 {
+			if _, ok := le[k]; !ok {
+				le[k] = ed
+			}
+		}
+		for k, ed := range e2 {
+			if _, ok := re[k]; !ok {
+				re[k] = ed
+			}
+		}
+	}
+	return le, re
+}
+
+func getEdit(tu pair) aligner.JSONEdit {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Empty translation unit!", tu)
+		}
+	}()
+	switch {
+	case len(tu.Hom) == 0:
+		return aligner.JSONEdit{
+			Type:   "ins",
+			Source: []string{},
+			Target: []string{"PARA-" + tu.Para[0].ID},
+		}
+	case len(tu.Para) == 0:
+		return aligner.JSONEdit{
+			Type:   "del",
+			Source: []string{"HOM-" + tu.Hom[0].ID},
+			Target: []string{},
+		}
+	case len(tu.Hom) == len(tu.Para) && len(tu.Para) == 1 && tu.Hom[0].Text == tu.Para[0].Text:
+		return aligner.JSONEdit{
+			Type:   "eq",
+			Source: []string{"HOM-" + tu.Hom[0].ID},
+			Target: []string{"PARA-" + tu.Para[0].ID},
+		}
+	}
+
+	homIDs := []string{}
+	for _, v := range tu.Hom {
+		homIDs = append(homIDs, "HOM-"+v.ID)
+	}
+
+	paraIDs := []string{}
+	for _, v := range tu.Para {
+		paraIDs = append(paraIDs, "PARA-"+v.ID)
+	}
+
+	return aligner.JSONEdit{
+		Type:   "sub",
+		Source: homIDs,
+		Target: paraIDs,
+	}
+}
+
+func getTranslationUnits(txt string) []translationUnit {
+	tus := []translationUnit{}
+
+	words := strings.Split(txt, " ")
+	for _, v := range words {
+		if v != "" {
+			split := strings.Split(v, "_")
+			r := regexp.MustCompile(`\{(\d*-\d*)\}`)
+			matches := r.FindStringSubmatch(split[3])
+			id := matches[1]
+			tus = append(tus, translationUnit{ID: id, Text: removeAccents(split[0])})
+		}
+	}
+
+	return tus
+}
+
+func removeAccents(s string) string {
+	t2 := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+	conv, _, err := transform.String(t2, s)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	return conv
 }
 
 func generateTextData(folder string, words map[string]wordData, verses map[int][]verse) {
