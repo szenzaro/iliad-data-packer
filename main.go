@@ -62,7 +62,6 @@ func main() {
 		fmt.Println("Generate text info")
 		generateTextData(folder, words, verses)
 	}
-
 	for _, file := range versesFileNames {
 		fmt.Println()
 
@@ -682,13 +681,13 @@ func parseProseExcel(path string, IDPrefix string) (map[string]wordData, map[int
 		for _, row := range sheet.Rows {
 			if len(row.Cells) >= 2 && row.Cells[0].Value != "" {
 				vv := strings.TrimSpace(row.Cells[0].Value)
-				fmt.Println("Chant", chantPos+1, " ", vv, " - ", row.Cells[1])
+				verseText := strings.TrimSpace(row.Cells[1].Value)
 				vn, err := strconv.Atoi(vv)
 				if err != nil {
 					return nil, nil, err
 				}
 				wordIDs := []string{}
-				for wID, w := range strings.Split(row.Cells[1].Value, " ") {
+				for wID, w := range strings.Split(verseText, " ") {
 					ID := fmt.Sprint(IDPrefix, "-", chant, "-", vv, "-", wID)
 					word := wordData{
 						ID:     ID,
@@ -701,7 +700,7 @@ func parseProseExcel(path string, IDPrefix string) (map[string]wordData, map[int
 					wordIDs = append(wordIDs, ID)
 				}
 				v := verse{
-					Kind:    getKind(row.Cells[1].Value),
+					Kind:    getKind(verseText),
 					Number:  vn,
 					WordIDs: wordIDs,
 				}
