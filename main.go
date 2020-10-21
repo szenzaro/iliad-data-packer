@@ -26,7 +26,8 @@ import (
 )
 
 func main() {
-	dataFolder := flag.String("data", "input-data", "Data folder with xslx version. Each filename will be used as text id.")
+	versesTextFolder := flag.String("verse-data", "input-data/verses", "Data folder for texts in verses with xslx version. Each filename will be used as text id.")
+	proseTextFolder := flag.String("prose-data", "input-data/prose", "Data folder for texts in prose with xslx version. Each filename will be used as text id.")
 	vocPath := flag.String("voc", "data/Vocabulaire_Genavensis.xlsx", "path to the vocabulary xlsx file")
 	scholiePath := flag.String("sch", "data/scholied.json", "path to the scholie JSON file")
 	tmxPath := flag.String("tmx", "data/G44_ALI.tmx", "path to the manual TMX alignment file")
@@ -34,7 +35,12 @@ func main() {
 
 	flag.Parse()
 
-	fileNames, err := getFileNames(*dataFolder)
+	versesFileNames, err := getFileNames(*versesTextFolder)
+	if err != nil {
+		log.Fatalln(err)
+	}
+
+	proseFileNames, err := getFileNames(*proseTextFolder)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -44,10 +50,23 @@ func main() {
 	}
 	start := time.Now()
 	texts := map[string]textInfo{}
-	for _, file := range fileNames {
+
+	for _, file := range proseFileNames {
+		words, verses, err := parseProseExcel(fmt.Sprint(*proseTextFolder, "/", file), file[:2])
+		if err != nil {
+			log.Fatalln(err)
+		}
+		textName := getTextName(file)
+		texts[textName] = textInfo{words, verses}
+		folder := "texts/" + textName + "/"
+		fmt.Println("Generate text info")
+		generateTextData(folder, words, verses)
+	}
+
+	for _, file := range versesFileNames {
 		fmt.Println()
 
-		words, verses, err := parseExcel(fmt.Sprint(*dataFolder, "/", file))
+		words, verses, err := parseExcel(fmt.Sprint(*versesTextFolder, "/", file))
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -66,7 +85,7 @@ func main() {
 
 		fmt.Println()
 	}
-	generateAlignments(fileNames, texts, *vocPath, *scholiePath)
+	generateAlignments(versesFileNames, texts, *vocPath, *scholiePath)
 	generateManualAlignments(*tmxPath, "homeric", "paraphrase")
 	generateScholieAligment(*schAlignPath)
 
@@ -105,6 +124,7 @@ type translationUnit struct{ ID, Text string }
 type pair struct{ Hom, Para []translationUnit }
 
 type scholieAlignment struct {
+	Kind   string   `json:"kind"`
 	Source []string `json:"source"`
 	Target []string `json:"target"`
 }
@@ -120,6 +140,7 @@ func generateScholieAligment(path string) {
 	homSourceData := map[string][]string{}
 	paraTargetData := map[string][]string{}
 	paraSourceData := map[string][]string{}
+	wordData := map[string]string{}
 
 	getSource := func(ss []string, s string) []string {
 		d := []string{}
@@ -139,6 +160,9 @@ func generateScholieAligment(path string) {
 						data[s] = append(data[s], x)
 					}
 				}
+				if data[s] == nil {
+					data[s] = []string{}
+				}
 				source[s] = append(source[s], getSource(ss, s)...)
 			}
 		}
@@ -147,6 +171,13 @@ func generateScholieAligment(path string) {
 	for _, row := range xlFile.Sheets[0].Rows {
 		homIDs := strings.Split(strings.TrimSpace(row.Cells[0].Value), ";")
 		paraIDs := strings.Split(strings.TrimSpace(row.Cells[1].Value), ";")
+
+		for _, ID := range homIDs {
+			wordData[ID] = strings.TrimSpace(row.Cells[2].Value)
+		}
+		for _, ID := range paraIDs {
+			wordData[ID] = strings.TrimSpace(row.Cells[2].Value)
+		}
 
 		putData(homTargetData, homSourceData, paraIDs, homIDs...)
 		putData(paraTargetData, paraSourceData, homIDs, paraIDs...)
@@ -159,7 +190,7 @@ func generateScholieAligment(path string) {
 		if source == nil {
 			source = []string{}
 		}
-		homAlignment[k] = scholieAlignment{Source: source, Target: homTargetData[k]}
+		homAlignment[k] = scholieAlignment{Source: source, Target: homTargetData[k], Kind: wordData[k]}
 	}
 
 	paraAlignment := map[string]scholieAlignment{}
@@ -168,11 +199,11 @@ func generateScholieAligment(path string) {
 		if source == nil {
 			source = []string{}
 		}
-		paraAlignment[k] = scholieAlignment{Source: source, Target: paraTargetData[k]}
+		paraAlignment[k] = scholieAlignment{Source: source, Target: paraTargetData[k], Kind: wordData[k]}
 	}
 
-	writeToJSON("out/scholie-alignment", "out/scholie-alignment/hom-scholie-alignment.json", homAlignment)
-	writeToJSON("out/scholie-alignment", "out/scholie-alignment/para-scholie-alignment.json", paraAlignment)
+	writeToJSON("out/scholie-alignment/homeric", "out/scholie-alignment/homeric/scholie.json", homAlignment)
+	writeToJSON("out/scholie-alignment/scholie", "out/scholie-alignment/scholie/homeric.json", paraAlignment)
 }
 
 func getTextName(fileName string) string { return fileName[:len(fileName)-5] }
@@ -514,7 +545,11 @@ func writeToJSON(folder, path string, data interface{}) {
 func wordsToExportData(ws map[string]wordData) map[string][]interface{} {
 	d := map[string][]interface{}{}
 	for k, w := range ws {
-		d[k] = []interface{}{w.Text, w.CleanText, w.Lemma, w.Tag, w.Verse}
+		if w.Lemma == "" {
+			d[k] = []interface{}{w.Text, w.Verse}
+		} else {
+			d[k] = []interface{}{w.Text, w.CleanText, w.Lemma, w.Tag, w.Verse}
+		}
 	}
 	return d
 }
@@ -624,6 +659,59 @@ func getVerseInfo(row *xlsx.Row) (int, string, int, error) { // get book, kind, 
 	return book, kind, verseNumber, nil
 }
 
+func parseProseExcel(path string, IDPrefix string) (map[string]wordData, map[int][]verse, error) { // returns all words and verses divided by book in prose text
+	fmt.Println("Parsing ", path)
+	xlFile, err := xlsx.OpenFile(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	words := map[string]wordData{}
+	versesByBook := map[int][]verse{}
+
+	getKind := func(s string) string {
+		if strings.HasPrefix(strings.ToUpper(s), "OMISIT") {
+			return "o"
+		}
+		return "v"
+	}
+
+	for chantPos, sheet := range xlFile.Sheets {
+		chant := chantPos + 1
+		versesByBook[chant] = []verse{}
+		for _, row := range sheet.Rows {
+			if len(row.Cells) >= 2 && row.Cells[0].Value != "" {
+				vv := strings.TrimSpace(row.Cells[0].Value)
+				fmt.Println("Chant", chantPos+1, " ", vv, " - ", row.Cells[1])
+				vn, err := strconv.Atoi(vv)
+				if err != nil {
+					return nil, nil, err
+				}
+				wordIDs := []string{}
+				for wID, w := range strings.Split(row.Cells[1].Value, " ") {
+					ID := fmt.Sprint(IDPrefix, "-", chant, "-", vv, "-", wID)
+					word := wordData{
+						ID:     ID,
+						Chant:  fmt.Sprint(chant),
+						Source: IDPrefix,
+						Text:   w,
+						Verse:  vv,
+					}
+					words[ID] = word
+					wordIDs = append(wordIDs, ID)
+				}
+				v := verse{
+					Kind:    getKind(row.Cells[1].Value),
+					Number:  vn,
+					WordIDs: wordIDs,
+				}
+				versesByBook[chant] = append(versesByBook[chant], v)
+			}
+		}
+	}
+	return words, versesByBook, nil
+}
+
 func parseExcel(path string) (map[string]wordData, map[int][]verse, error) { // returns all words and verses divided by book
 	fmt.Println("Parsing ", path)
 	xlFile, err := xlsx.OpenFile(path)
@@ -650,7 +738,7 @@ func parseExcel(path string) (map[string]wordData, map[int][]verse, error) { // 
 			if err != nil {
 				return nil, nil, err
 			}
-			// nuovo verso quando, cambia il libro oppure cambia il tipo oppure cambia il numero di verso
+			// new when book, kind or verse changes
 			if book != lastBook || lastKind != kind || lastVerseNum != verseNumber {
 				// setup new Verse!
 				if _, exists := versesByBook[book]; !exists {
@@ -664,9 +752,7 @@ func parseExcel(path string) (map[string]wordData, map[int][]verse, error) { // 
 			lastBook = book
 			lastKind = kind
 			lastVerseNum = verseNumber
-			// se nuovo
-			// versesByBook[book] = nil // nuovo verso con il tipo giusto
-			// altimenti appendi
+			// versesByBook[book] = nil
 			// versesByBook[book][len(versesByBook)-1].wordIDs = append(versesByBook[book][len(versesByBook)-1].wordIDs, word.ID)
 
 		}
