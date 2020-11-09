@@ -1,27 +1,13 @@
 # iliad-data-packer
-Pack the data to be used in the iliad-viewer application
+This application packs the data to be used in the Iliadoscope (iliad-viewer) application.
 
+This application is part of the SNF project [Le devenir numérique d'un texte fondateur : l'Iliade et le Genavensis Græcus 44](http://p3.snf.ch/Project-172733)
 
-words: Map<{ text, lemma, ... }
-verses: [ VerseType, number, data... ]
+All the files in the data, data_backup, input-data, input-data copy directories are under the CC BY-NC-ND 4.0 license.
+[![License: CC BY-NC-ND 4.0](https://img.shields.io/badge/License-CC%20BY--NC--ND%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-nd/4.0/)
 
-index: Map<int[]>
-
-alignment: Map<{ type:string, target: string[]> // ID -> [ "type", ["id1", "id1", ...]]
-
-ordered_alignment: Map<{ type:string, target: string[]>
-id -> ids Map<{type:String, target: string[]}>
-
-vocabulary: Map<string[]>
-scholie: Map<string[]>
-
-
-ExcelH, ExcelP, ExcelFR -> words, verses
-words -> index
-
-
-index ->
-
+The packer will produce a foldere structure like the one below
+```
 data
     manifest.json
     vocabulary.json
@@ -41,8 +27,8 @@ data
                 text3.json
                 ...
         - manual
-    + texts
-        + text1
+    - texts
+        - text1
             - 1 (chant number)
                 verses.json
                 data.json
@@ -50,7 +36,7 @@ data
             - ...
         - text2
         - ...
-        + index
+        - index
             lemma.json
             text.json
-    
+```
